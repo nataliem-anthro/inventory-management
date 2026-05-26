@@ -6,6 +6,7 @@ export default {
     orders: '注文',
     finance: '財務',
     demandForecast: '需要予測',
+    restocking: '補充',
     companyName: '触媒コンポーネンツ',
     subtitle: '在庫管理システム'
   },
@@ -106,6 +107,9 @@ export default {
     title: '注文',
     description: '顧客注文の表示と管理',
     allOrders: 'すべての注文',
+    submittedOrders: '送信済み注文',
+    noSubmittedOrders: '補充注文はまだ送信されていません。',
+    leadTimeDays: '{days}日',
     totalOrders: '総注文数',
     totalRevenue: '総収益',
     avgOrderValue: '平均注文額',
@@ -124,8 +128,40 @@ export default {
       value: '価格',
       totalValue: '合計金額',
       status: 'ステータス',
+      leadTime: 'リードタイム',
       expectedDelivery: '予定配達日',
       actualDelivery: '実際の配達日'
+    }
+  },
+
+  // Restocking
+  restocking: {
+    title: '補充',
+    description: '予算を設定し、予測不足が最も大きい品目を補充します',
+    budgetLabel: '利用可能な予算',
+    budgetHelp: 'スライダーで補充に使える金額を設定します',
+    recommendedTitle: '推奨品目',
+    recommendedHelp: '予測不足の大きい順に、予算内に収まる品目を表示します',
+    itemsSelected: '選択品目数',
+    totalCost: '合計コスト',
+    budgetRemaining: '残り予算',
+    placeOrder: '発注する',
+    placingOrder: '発注中...',
+    orderPlaced: '補充注文 {orderNumber} を発注しました。注文タブで確認できます。',
+    orderError: '補充注文の発注に失敗しました。もう一度お試しください。',
+    viewInOrders: '注文タブで表示',
+    noRecommendations: 'この予算内に収まる品目がありません。予算を増やしてください。',
+    emptyState: '予算を調整して、補充する推奨品目を表示します。',
+    table: {
+      sku: 'SKU',
+      itemName: '品目名',
+      currentDemand: '現在の需要',
+      forecastedDemand: '予測需要',
+      shortfall: '不足',
+      orderQty: '発注数量',
+      unitCost: '単価',
+      lineTotal: '小計',
+      trend: 'トレンド'
     }
   },
 
@@ -204,6 +240,7 @@ export default {
     shipped: '出荷済み',
     processing: '処理中',
     backordered: 'バックオーダー',
+    submitted: '送信済み',
     inStock: '在庫あり',
     lowStock: '在庫僅少',
     adequate: '適量'
