@@ -1,0 +1,23 @@
+[
+  {
+    "id": "t1",
+    "title": "Reconcile Q1 inventory counts",
+    "priority": "high",
+    "dueDate": "2026-05-22",
+    "status": "pending"
+  },
+  {
+    "id": "t2",
+    "title": "Approve supplier purchase orders",
+    "priority": "medium",
+    "dueDate": "2026-05-27",
+    "status": "pending"
+  },
+  {
+    "id": "t3",
+    "title": "Archive completed shipment records",
+    "priority": "low",
+    "dueDate": "2026-06-12",
+    "status": "completed"
+  }
+]

@@ -2,7 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
-from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+from datetime import datetime, timedelta
+from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders, tasks
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -89,6 +90,7 @@ class DemandForecast(BaseModel):
     forecasted_demand: int
     trend: str
     period: str
+    unit_cost: Optional[float] = None
 
 class BacklogItem(BaseModel):
     id: str
@@ -119,6 +121,47 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockOrderItem(BaseModel):
+    item_sku: str
+    item_name: str
+    quantity: int
+    unit_cost: float
+    line_total: float
+
+class CreateRestockOrderRequest(BaseModel):
+    budget: float
+    items: List[RestockOrderItem]
+
+class RestockOrder(BaseModel):
+    id: str
+    order_number: str
+    items: List[RestockOrderItem]
+    total_value: float
+    budget: float
+    status: str
+    order_date: str
+    expected_delivery: str
+    lead_time_days: int
+
+class Task(BaseModel):
+    id: str
+    title: str
+    priority: str
+    dueDate: str
+    status: str
+
+class CreateTaskRequest(BaseModel):
+    title: str
+    priority: str = "medium"
+    dueDate: str
+
+# Fixed lead time (days) applied to every submitted restocking order
+RESTOCK_LEAD_TIME_DAYS = 7
+
+# In-memory store for submitted restocking orders.
+# Like all data here, this is ephemeral and resets when the server restarts.
+submitted_restock_orders: List[dict] = []
 
 # API endpoints
 @app.get("/")
@@ -303,6 +346,147 @@ def get_monthly_trends():
     result = list(months.values())
     result.sort(key=lambda x: x['month'])
     return result
+
+def build_restock_recommendations(budget: float) -> dict:
+    """Recommend items to restock within a budget.
+
+    Strategy: prioritize the biggest forecast shortfall first. For each demand
+    forecast item with a positive gap (forecasted - current), order exactly
+    enough units to close that gap. Items are sorted by shortfall (descending)
+    and added while they fit the remaining budget. This mirrors the client-side
+    calculation in the Restocking view so the two never diverge.
+    """
+    candidates = []
+    for d in demand_forecasts:
+        shortfall = d.get("forecasted_demand", 0) - d.get("current_demand", 0)
+        if shortfall <= 0:
+            continue
+        unit_cost = d.get("unit_cost") or 0
+        line_total = round(shortfall * unit_cost, 2)
+        candidates.append({
+            "item_sku": d["item_sku"],
+            "item_name": d["item_name"],
+            "current_demand": d["current_demand"],
+            "forecasted_demand": d["forecasted_demand"],
+            "trend": d.get("trend"),
+            "shortfall": shortfall,
+            "quantity": shortfall,
+            "unit_cost": unit_cost,
+            "line_total": line_total,
+        })
+
+    # Biggest shortfall first; line cost as a stable tiebreaker
+    candidates.sort(key=lambda c: (c["shortfall"], c["line_total"]), reverse=True)
+
+    recommended = []
+    remaining = budget
+    for c in candidates:
+        if c["line_total"] <= remaining:
+            recommended.append(c)
+            remaining = round(remaining - c["line_total"], 2)
+
+    total_cost = round(sum(c["line_total"] for c in recommended), 2)
+    return {
+        "budget": round(budget, 2),
+        "recommended": recommended,
+        "candidates": candidates,
+        "total_cost": total_cost,
+        "remaining_budget": round(budget - total_cost, 2),
+    }
+
+@app.get("/api/restocking/recommendations")
+def get_restock_recommendations(budget: float = 0):
+    """Get budget-constrained restocking recommendations from demand forecasts."""
+    if budget < 0:
+        raise HTTPException(status_code=400, detail="Budget must be non-negative")
+    return build_restock_recommendations(budget)
+
+@app.get("/api/restocking/orders", response_model=List[RestockOrder])
+def get_restock_orders():
+    """List all submitted restocking orders (most recent first)."""
+    return list(reversed(submitted_restock_orders))
+
+@app.post("/api/restocking/orders", response_model=RestockOrder)
+def create_restock_order(request: CreateRestockOrderRequest):
+    """Submit a restocking order. Stored in memory for the server session."""
+    if not request.items:
+        raise HTTPException(status_code=400, detail="Cannot submit an order with no items")
+
+    order_date = datetime.now()
+    expected = order_date + timedelta(days=RESTOCK_LEAD_TIME_DAYS)
+    total_value = round(sum(item.line_total for item in request.items), 2)
+    seq = len(submitted_restock_orders) + 1
+
+    order = {
+        "id": str(seq),
+        "order_number": f"RO-{1000 + seq}",
+        "items": [item.model_dump() for item in request.items],
+        "total_value": total_value,
+        "budget": round(request.budget, 2),
+        "status": "Submitted",
+        "order_date": order_date.strftime("%Y-%m-%d"),
+        "expected_delivery": expected.strftime("%Y-%m-%d"),
+        "lead_time_days": RESTOCK_LEAD_TIME_DAYS,
+    }
+    submitted_restock_orders.append(order)
+    return order
+
+# Allowed task priority levels (matches the client task form)
+ALLOWED_TASK_PRIORITIES = {"high", "medium", "low"}
+
+# In-memory id sequence for tasks. Seeded tasks use ids t1..tN; generated ids
+# continue from there. Prefixed so they never collide with the client-side
+# mock task ids (integers 1-4) that the frontend merges into the same list.
+_task_seq = len(tasks)
+
+def _next_task_id() -> str:
+    global _task_seq
+    _task_seq += 1
+    return f"t{_task_seq}"
+
+@app.get("/api/tasks", response_model=List[Task])
+def get_tasks():
+    """Get all to-do tasks (most recently added first)."""
+    return tasks
+
+@app.post("/api/tasks", response_model=Task, status_code=201)
+def create_task(request: CreateTaskRequest):
+    """Create a new task. Stored in memory for the server session."""
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Task title is required")
+    if request.priority not in ALLOWED_TASK_PRIORITIES:
+        raise HTTPException(status_code=400, detail="Priority must be one of: high, medium, low")
+    if not request.dueDate:
+        raise HTTPException(status_code=400, detail="Due date is required")
+
+    task = {
+        "id": _next_task_id(),
+        "title": title,
+        "priority": request.priority,
+        "dueDate": request.dueDate,
+        "status": "pending",
+    }
+    tasks.insert(0, task)  # newest first
+    return task
+
+@app.patch("/api/tasks/{task_id}", response_model=Task)
+def toggle_task(task_id: str):
+    """Toggle a task between pending and completed."""
+    task = next((t for t in tasks if t["id"] == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task["status"] = "completed" if task["status"] == "pending" else "pending"
+    return task
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str):
+    """Delete a task by id."""
+    task = next((t for t in tasks if t["id"] == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    tasks.remove(task)
+    return {"id": task_id, "deleted": True}
 
 if __name__ == "__main__":
     import uvicorn
